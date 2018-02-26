@@ -12,7 +12,7 @@
 	#include <ucontext.h>
 #endif
 
-#define STACK_SIZE(1024*1024)
+#define STACK_SIZE (1024*1024)
 #define DEFAULT_COROUTINE 16
 
 struct coroutine;
@@ -46,8 +46,8 @@ _co_new(struct schedule *S, coroutine_func func, void *ud) {
 	co->cap = 0;
 	co->size = 0;
 	co->status = COROUTINE_READY;
-	co-stack = NULL;
-	return co
+	co->stack = NULL;
+	return co;
 }
 
 void 
@@ -134,8 +134,8 @@ coroutine_resume(struct schedule *S, int id)
 			C->ctx.uc_stack.ss_sp = S->stack;
 			C->ctx.uc_stack.ss_size = STACK_SIZE;
 			C->ctx.uc_link = &S->main;
-			S->runing = id;
-			c->status = COROUTINE_RUNNING;
+			S->running = id;
+			C->status = COROUTINE_RUNNING;
 			uintptr_t ptr = (uintptr_t)S;
 			makecontext(&C->ctx, (void(*)(void))mainfunc, 2, (uint32_t)ptr, (uint32_t)(ptr>>32));
 			swapcontext(&S->main, &C->ctx);	
@@ -149,5 +149,44 @@ coroutine_resume(struct schedule *S, int id)
 		default:
 			assert(0);
 	}
+}
+
+static void 
+_save_stack(struct coroutine *C, char *top) {
+	char dummy = 0;
+	assert(top - &dummy <= STACK_SIZE);
+	if(C->cap < top - &dummy) {
+		free(C->stack);
+		C->cap = top - &dummy;
+		C->stack = malloc(C->cap);
+	}
+	C->size = top - &dummy;
+	memcpy(C->stack, &dummy, C->size);
+}
+
+void
+coroutine_yield(struct schedule *S) {
+	int id = S->running;
+	assert(id >= 0);
+	struct coroutine *C = S->co[id];
+	assert((char*)&C > S->stack);
+	_save_stack(C, S->stack + STACK_SIZE);
+	C->status = COROUTINE_SUSPEND;
+	S->running = -1;
+	swapcontext(&C->ctx, &S->main);
+}
+
+int
+coroutine_status(struct schedule *S, int id) {
+	assert(id>=0 && id < S->cap);
+	if(S->co[id] == NULL) {
+		return COROUTINE_DEAD;
+	}
+	return S->co[id]->status;
+}
+
+int 
+coroutine_running(struct schedule *S) {
+	return S->running;
 }
 
